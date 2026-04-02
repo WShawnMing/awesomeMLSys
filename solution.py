@@ -97,7 +97,15 @@ def fused_dropout_softmax_bwd(
     has_dropout = attention_dropout > 0.0
     inv_1_minus_p = 1.0 / (1.0 - attention_dropout) if has_dropout else 1.0
     
-    # Launch kernel
+    # Tune num_warps based on block size for optimal occupancy
+    if BLOCK_SIZE <= 512:
+        num_warps = 4
+    elif BLOCK_SIZE <= 2048:
+        num_warps = 8
+    else:
+        num_warps = 16
+    
+    # Launch kernel — one program per row
     grid = (total_rows,)
     _fused_dropout_softmax_bwd_kernel[grid](
         grad_aw_dropped_2d,
@@ -108,6 +116,7 @@ def fused_dropout_softmax_bwd(
         inv_1_minus_p=inv_1_minus_p,
         HAS_DROPOUT=has_dropout,
         BLOCK_SIZE=BLOCK_SIZE,
+        num_warps=num_warps,
     )
     
     return grad_attn_scores_2d.reshape(B, H, Sq, Skv)
