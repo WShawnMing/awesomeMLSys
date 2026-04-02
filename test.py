@@ -84,14 +84,13 @@ def _run_cpu_equivalent(
     # Step 1: Transpose + upcast
     grad_attn_output_transposed = grad_attn_output.transpose(1, 2).to(torch.float32)
 
-    # Step 2: GQA-aware Matmul 1
+    # Step 2: GQA-aware Matmul 1 (same logic as solution.py)
+    GSq = num_key_value_groups * seq_len_q
     go_gqa = grad_attn_output_transposed.reshape(
-        batch_size, num_key_value_heads, num_key_value_groups * seq_len_q, head_dim
+        batch_size, num_key_value_heads, GSq, head_dim
     )
-    grad_attn_weights_dropped = torch.matmul(
-        go_gqa,
-        value_states.to(torch.float32).transpose(-2, -1)
-    )
+    value_states_f32_t = value_states.to(torch.float32).transpose(-2, -1)
+    grad_attn_weights_dropped = torch.matmul(go_gqa, value_states_f32_t)
     grad_attn_weights_dropped = grad_attn_weights_dropped.view(
         batch_size, num_attention_heads, seq_len_q, seq_len_kv
     )
@@ -107,16 +106,13 @@ def _run_cpu_equivalent(
     grad_attn_scores = attn_weights_f32 * (grad_attn_weights - sum_term)
     grad_attn_scores = grad_attn_scores.to(torch.bfloat16)
 
-    # Step 4: GQA-aware Matmul 2 + implicit aggregation
+    # Step 4: GQA-aware Matmul 2 + implicit aggregation (same logic as solution.py)
     aw_dropped_gqa = attn_weights_dropped.view(
-        batch_size, num_key_value_heads, num_key_value_groups * seq_len_q, seq_len_kv
+        batch_size, num_key_value_heads, GSq, seq_len_kv
     ).to(torch.float32)
-    go_gqa_for_v = grad_attn_output_transposed.reshape(
-        batch_size, num_key_value_heads, num_key_value_groups * seq_len_q, head_dim
-    )
     grad_value_states = torch.matmul(
         aw_dropped_gqa.transpose(-2, -1),
-        go_gqa_for_v
+        go_gqa  # reused
     )
     grad_value_states = grad_value_states.to(torch.bfloat16)
 
